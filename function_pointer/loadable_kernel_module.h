@@ -1,7 +1,0 @@
-#ifndef __LOADABLE_KERNEL_MODULE_H
-#define __LOADABLE_KERNEL_MODULE_H
-
-#define MAGIC 'k'
-#define IOCTL_MOD_HOOK  _IO(MAGIC, 2)
-
-#endif /* __LOADABLE_KERNEL_MODULE_H */

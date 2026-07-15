@@ -1,196 +1,115 @@
-#include <linux/cdev.h>
-#include <linux/fs.h>
-#include <linux/kprobes.h>
 #include <linux/module.h>
-#include <linux/reboot.h>
-#include <linux/signal.h>
 #include <linux/syscalls.h>
 #include <asm/syscall.h>
 
-#include "loadable_kernel_module.h"
+// kprobe for kallsyms_lookup_name
+#include <linux/kprobes.h>
+static struct kprobe kp = {
+	    .symbol_name = "kallsyms_lookup_name"
+};
 
 #define OURMODNAME "loadable_kernel_module"
-
 MODULE_AUTHOR("Harry Hsu x90613@gmail.com");
 MODULE_DESCRIPTION("Syscall hook test LKM");
 MODULE_LICENSE("Dual MIT/GPL");
 MODULE_VERSION("1.0");
 
-static struct kprobe kp = {
-	.symbol_name = "kallsyms_lookup_name",
-};
-
-static int major;
-static struct cdev *kernel_cdev;
+// Addresses and permissions needed to replace syscall table entries.
 static unsigned long *__sys_call_table;
 static void (*update_mapping_prot)(phys_addr_t phys, unsigned long virt,
 					   phys_addr_t size, pgprot_t prot);
 static unsigned long start_rodata;
 static unsigned long init_begin;
-
 #define section_size (init_begin - start_rodata)
 
 typedef asmlinkage long (*t_syscall)(const struct pt_regs *);
 static t_syscall orig_kill;
-static t_syscall orig_reboot;
-static t_syscall orig_getdents64;
-static bool hooks_installed;
 
-static asmlinkage long hacked_reboot(const struct pt_regs *regs)
+// Syscall hook: deny SIGKILL and pass all other signals to the original syscall.
+static asmlinkage long hacked_kill(const struct pt_regs *pt_regs)
 {
-	unsigned int cmd = (unsigned int)regs->regs[2];
+	// On arm64/x86_64: kill(2) signature is kill(pid, sig) — sig is the 2nd argument (regs[1]).
+	int sig = (int) pt_regs->regs[1];
+	printk(KERN_INFO "enter hacked kill section.\n");
 
-	pr_info("enter hacked reboot section\n");
-	if (cmd == LINUX_REBOOT_CMD_POWER_OFF) {
-		pr_info("power off command intercepted and denied\n");
-		return 0;
+	switch (sig) {
+		case 9:
+			printk(KERN_INFO "kill signal intercepted and denied.\n");
+			break;
+		default:
+			return orig_kill(pt_regs);
 	}
-	return orig_reboot(regs);
-}
-
-static asmlinkage long hacked_kill(const struct pt_regs *regs)
-{
-	int sig = (int)regs->regs[1];
-
-	pr_info("enter hacked kill section\n");
-	if (sig == SIGKILL) {
-		pr_info("kill signal intercepted and denied\n");
-		return 0;
-	}
-	return orig_kill(regs);
-}
-
-static asmlinkage long hacked_getdents64(const struct pt_regs *regs)
-{
-	pr_info("enter hacked getdents64 section\n");
-	return orig_getdents64(regs);
+	return 0;
 }
 
 static unsigned long *get_syscall_table(void)
 {
+	unsigned long *syscall_table;
 	typedef unsigned long (*kallsyms_lookup_name_t)(const char *name);
-	kallsyms_lookup_name_t lookup;
-	unsigned long *table;
-
+	kallsyms_lookup_name_t kallsyms_lookup_name;
+	// kallsyms_lookup_name is unexported since kernel 5.7. We recover its address by registering
+	// a kprobe on its symbol, reading kp.addr, then immediately unregistering.
 	if (register_kprobe(&kp) < 0)
 		return NULL;
-	lookup = (kallsyms_lookup_name_t)kp.addr;
+	kallsyms_lookup_name = (kallsyms_lookup_name_t) kp.addr;
 	unregister_kprobe(&kp);
 
-	table = (unsigned long *)lookup("sys_call_table");
-	update_mapping_prot = (void *)lookup("update_mapping_prot");
-	start_rodata = (unsigned long)lookup("__start_rodata");
-	init_begin = (unsigned long)lookup("__init_begin");
-	return table;
+	// The parameters to be obtained from kallsyms_lookup_name are generated here.
+	syscall_table = (unsigned long*)kallsyms_lookup_name("sys_call_table");
+	update_mapping_prot = (void *)kallsyms_lookup_name("update_mapping_prot");
+	start_rodata = (unsigned long)kallsyms_lookup_name("__start_rodata");
+	init_begin = (unsigned long)kallsyms_lookup_name("__init_begin");
+
+	printk(KERN_INFO "sys_call_table address: %p\n", syscall_table);
+	return syscall_table;
 }
 
-static void protect_memory(void)
+static inline void protect_memory(void)
 {
-	update_mapping_prot(__pa_symbol(start_rodata), start_rodata,
-				   section_size, PAGE_KERNEL_RO);
+	update_mapping_prot(__pa_symbol(start_rodata), (unsigned long)start_rodata, section_size, PAGE_KERNEL_RO); // Read - only
+	printk(KERN_INFO "Memory protected\n");
 }
 
-static void unprotect_memory(void)
+static inline void unprotect_memory(void)
 {
-	update_mapping_prot(__pa_symbol(start_rodata), start_rodata,
-				   section_size, PAGE_KERNEL);
+	update_mapping_prot(__pa_symbol(start_rodata), (unsigned long)start_rodata, section_size, PAGE_KERNEL); // Read - write
+	printk(KERN_INFO "Memory unprotected\n");
 }
 
-static int install_hooks(void)
+static void install_hooks(void)
 {
-	if (hooks_installed)
-		return 0;
-
 	unprotect_memory();
-	__sys_call_table[__NR_reboot] = (unsigned long)hacked_reboot;
-	__sys_call_table[__NR_kill] = (unsigned long)hacked_kill;
-	__sys_call_table[__NR_getdents64] = (unsigned long)hacked_getdents64;
+
+	__sys_call_table[__NR_kill] = (unsigned long)&hacked_kill;
+
 	protect_memory();
-	hooks_installed = true;
-	return 0;
 }
-
-static int lkm_open(struct inode *inode, struct file *filp)
-{
-	return 0;
-}
-
-static int lkm_release(struct inode *inode, struct file *filp)
-{
-	return 0;
-}
-
-static long lkm_ioctl(struct file *filp, unsigned int command,
-			      unsigned long arg)
-{
-	if (command != IOCTL_MOD_HOOK)
-		return -EINVAL;
-	return install_hooks();
-}
-
-static const struct file_operations fops = {
-	.owner = THIS_MODULE,
-	.open = lkm_open,
-	.unlocked_ioctl = lkm_ioctl,
-	.release = lkm_release,
-};
 
 static int __init lkm_init(void)
 {
-	dev_t dev_no;
-	int ret;
-
-	kernel_cdev = cdev_alloc();
-	if (!kernel_cdev)
-		return -ENOMEM;
-
-	ret = alloc_chrdev_region(&dev_no, 0, 1, OURMODNAME);
-	if (ret < 0)
-		goto err_cdev;
-	major = MAJOR(dev_no);
-
-	cdev_init(kernel_cdev, &fops);
-	kernel_cdev->owner = THIS_MODULE;
-	ret = cdev_add(kernel_cdev, dev_no, 1);
-	if (ret < 0)
-		goto err_region;
-
 	__sys_call_table = get_syscall_table();
-	if (!__sys_call_table || !update_mapping_prot) {
-		cdev_del(kernel_cdev);
-		unregister_chrdev_region(dev_no, 1);
+	if (!__sys_call_table || !update_mapping_prot || !start_rodata || !init_begin) {
+		printk(KERN_INFO "Failed to find sys_call_table\n");
 		return -ENOENT;
 	}
 
-	orig_reboot = (t_syscall)__sys_call_table[__NR_reboot];
-	orig_kill = (t_syscall)__sys_call_table[__NR_kill];
-	orig_getdents64 = (t_syscall)__sys_call_table[__NR_getdents64];
-	pr_info("%s loaded; use IOCTL_MOD_HOOK to install syscall hooks\n",
-		OURMODNAME);
-	return 0;
+	printk(KERN_INFO "__NR_kill: %d\n", __NR_kill);
 
-err_region:
-	unregister_chrdev_region(dev_no, 1);
-err_cdev:
-	cdev_del(kernel_cdev);
-	return ret < 0 ? ret : -ENOENT;
+	// To store original syscall table addresses
+	orig_kill = (t_syscall)__sys_call_table[__NR_kill];
+
+	install_hooks();
+
+	return 0;
 }
 
 static void __exit lkm_exit(void)
 {
-	dev_t dev_no = MKDEV(major, 0);
+	unprotect_memory();
+	__sys_call_table[__NR_kill] = (unsigned long)orig_kill;
+	protect_memory();
 
-	if (__sys_call_table && hooks_installed) {
-		unprotect_memory();
-		__sys_call_table[__NR_reboot] = (unsigned long)orig_reboot;
-		__sys_call_table[__NR_kill] = (unsigned long)orig_kill;
-		__sys_call_table[__NR_getdents64] = (unsigned long)orig_getdents64;
-		protect_memory();
-		hooks_installed = false;
-	}
-	cdev_del(kernel_cdev);
-	unregister_chrdev_region(dev_no, 1);
-	pr_info("%s removed\n", OURMODNAME);
+	pr_info("%s: removed\n", OURMODNAME);
 }
 
 module_init(lkm_init);
