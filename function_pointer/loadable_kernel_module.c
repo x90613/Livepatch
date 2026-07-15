@@ -87,9 +87,11 @@ static void install_hooks(void)
 
 static int __init lkm_init(void)
 {
+	printk(KERN_INFO "%s: module init\n", OURMODNAME);
+
 	__sys_call_table = get_syscall_table();
 	if (!__sys_call_table || !update_mapping_prot || !start_rodata || !init_begin) {
-		printk(KERN_INFO "Failed to find sys_call_table\n");
+		printk(KERN_ERR "%s: failed to find syscall hook symbols\n", OURMODNAME);
 		return -ENOENT;
 	}
 
@@ -99,17 +101,20 @@ static int __init lkm_init(void)
 	orig_kill = (t_syscall)__sys_call_table[__NR_kill];
 
 	install_hooks();
+	printk(KERN_INFO "%s: kill syscall hook installed\n", OURMODNAME);
 
 	return 0;
 }
 
 static void __exit lkm_exit(void)
 {
+	printk(KERN_INFO "%s: module exit\n", OURMODNAME);
+
 	unprotect_memory();
 	__sys_call_table[__NR_kill] = (unsigned long)orig_kill;
 	protect_memory();
 
-	pr_info("%s: removed\n", OURMODNAME);
+	printk(KERN_INFO "%s: kill syscall hook restored\n", OURMODNAME);
 }
 
 module_init(lkm_init);

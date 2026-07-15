@@ -19,22 +19,11 @@ sudo insmod ./loadable_kernel_module.ko
 
 # Confirm that the module is loaded.
 lsmod | grep loadable_kernel_module
-```
 
-## Observe the Hook
-
-Load the module first, then run the demo in the background. It prints its PID and
-waits for a signal:
-
-```sh
-# Install the kill syscall hook.
-sudo insmod ./loadable_kernel_module.ko
+#Load the module first, then run the demo in the background. It prints its PID and waits for a signal:
 
 # Start the user-space demo in the background.
-./out/kill_demo &
-
-# List the demo process and note its PID.
-ps aux | grep '[k]ill_demo'
+./out/kill_demo
 
 # Replace <PID> with the PID shown above.
 # Signal 10 (SIGUSR1) is not denied and passes through to the demo.
@@ -65,20 +54,6 @@ sudo rmmod loadable_kernel_module
 # SIGKILL should terminate the demo normally now.
 kill -KILL <PID>
 ps -p <PID>
-```
-
-## Kernel Build Options
-
-```sh
-# Build against a specific kernel build directory.
-make KDIR=/path/to/kernel-headers
-
-# Cross-compile an ARM64 module.
-make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- \
-  KDIR=/path/to/arm64/kernel/build
-
-# Remove kernel build artifacts and the demo program.
-make clean
 ```
 
 The target kernel needs matching headers, module-loading support, and access to
