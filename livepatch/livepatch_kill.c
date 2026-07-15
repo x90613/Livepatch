@@ -2,7 +2,9 @@
 #include <linux/livepatch.h>
 #include <linux/syscalls.h>
 #include <linux/signal.h>
-#include <linux/kprobes.h>
+#include <linux/pid.h>
+#include <linux/cred.h>
+#include <linux/sched.h>
 
 #define OURMODNAME "livepatch_kill"
 MODULE_AUTHOR("Harry Hsu x90613@gmail.com");
@@ -11,23 +13,18 @@ MODULE_LICENSE("GPL");
 MODULE_VERSION("1.0");
 MODULE_INFO(livepatch, "Y");
 
-// Use the same kprobe trick as the function_pointer approach to recover
-// kallsyms_lookup_name (unexported since kernel 5.7), then look up the
-// original __arm64_sys_kill so we can forward non-SIGKILL signals.
-static struct kprobe kp = {
-	.symbol_name = "kallsyms_lookup_name"
-};
-
-typedef asmlinkage long (*t_syscall)(const struct pt_regs *);
-static t_syscall orig_kill;
-
 // Livepatch replacement for __arm64_sys_kill.
-// arm64: kill(pid, sig) — sig in x1 (regs[1]).
-// Non-SIGKILL signals are forwarded to the original function via orig_kill,
-// exactly as the function_pointer approach does with orig_kill(regs).
+// arm64: kill(pid, sig) — pid in x0 (regs[0]), sig in x1 (regs[1]).
+//
+// Unlike the function_pointer approach, we cannot call orig_kill(regs) here:
+// orig_kill would point at __arm64_sys_kill itself, and the ftrace hook would
+// redirect it back into this function causing infinite recursion.
+// Instead we replicate what __arm64_sys_kill does internally: build a
+// kernel_siginfo and call kill_pid_info(), which is an exported symbol.
 static asmlinkage long livepatch_sys_kill(const struct pt_regs *regs)
 {
-	int sig = (int)regs->regs[1]; // x1
+	pid_t pid = (pid_t)regs->regs[0]; // x0
+	int   sig = (int) regs->regs[1];  // x1
 
 	pr_info("%s: enter kill section.\n", OURMODNAME);
 
@@ -36,7 +33,21 @@ static asmlinkage long livepatch_sys_kill(const struct pt_regs *regs)
 		return 0;
 	}
 
-	return orig_kill(regs);
+	struct kernel_siginfo info;
+	struct pid *pid_struct;
+	int ret;
+
+	clear_siginfo(&info);
+	info.si_signo = sig;
+	info.si_errno = 0;
+	info.si_code  = SI_USER;
+	info.si_pid   = task_tgid_vnr(current);
+	info.si_uid   = from_kuid_munged(current_user_ns(), current_uid());
+
+	pid_struct = find_get_pid(pid);
+	ret = kill_pid_info(sig, &info, pid_struct);
+	put_pid(pid_struct);
+	return ret;
 }
 
 static struct klp_func funcs[] = {
@@ -62,24 +73,7 @@ static struct klp_patch patch = {
 
 static int __init livepatch_kill_init(void)
 {
-	typedef unsigned long (*kallsyms_lookup_name_t)(const char *name);
-	kallsyms_lookup_name_t kallsyms_lookup_name;
-
 	pr_info("%s: module init\n", OURMODNAME);
-
-	if (register_kprobe(&kp) < 0) {
-		pr_err("%s: failed to register kprobe\n", OURMODNAME);
-		return -ENOENT;
-	}
-	kallsyms_lookup_name = (kallsyms_lookup_name_t)kp.addr;
-	unregister_kprobe(&kp);
-
-	orig_kill = (t_syscall)kallsyms_lookup_name("__arm64_sys_kill");
-	if (!orig_kill) {
-		pr_err("%s: failed to find __arm64_sys_kill\n", OURMODNAME);
-		return -ENOENT;
-	}
-
 	return klp_enable_patch(&patch);
 }
 

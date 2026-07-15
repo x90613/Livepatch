@@ -9,7 +9,10 @@ the module is unloaded — no manual syscall table restoration needed.
 1. `klp_enable_patch()` resolves the symbol `__arm64_sys_kill` via kallsyms and
    registers an ftrace handler that redirects calls to `livepatch_sys_kill`.
 2. The replacement function reads `pid` and `sig` from `pt_regs` (x0/x1 on
-   arm64), blocks `SIGKILL`, and forwards everything else to `ksys_kill()`.
+   arm64) and blocks `SIGKILL`.  For all other signals it replicates what
+   `__arm64_sys_kill` does internally: builds a `kernel_siginfo` and calls
+   `kill_pid_info()`.  Calling `__arm64_sys_kill` directly would cause infinite
+   recursion because ftrace would redirect it back into the replacement.
 3. On `rmmod`, the livepatch core unregisters the ftrace handler and restores
    the original function automatically.
 
