@@ -1,4 +1,4 @@
-# Livepatch Demo
+# syscall_demo
 
 Two Linux kernel modules that hook the `kill(2)` syscall to block `SIGKILL`,
 implemented two different ways.  Side by side, they show how the same behaviour
@@ -12,7 +12,6 @@ livepatch mechanism.
 | Symbol lookup | kprobe → `kallsyms_lookup_name` | `klp_enable_patch()` |
 | Forward to original | Saved function pointer (`orig_kill`) | `ksys_kill(pid, sig)` |
 | Restore on unload | Manual (`lkm_exit`) | Automatic (livepatch core) |
-| Required license | Any | GPL |
 
 Both modules target **arm64, kernel 6.18**.
 
@@ -65,7 +64,11 @@ kill -9 <PID>
 ps -p <PID>    # still listed
 
 # Unload restores normal behaviour
-sudo rmmod function_pointer_kill   # or livepatch_kill
+sudo rmmod function_pointer_kill
+# For livepatch, you can also disable via sysfs first (the sysfs entry
+# disappears once the transition completes), then rmmod:
+#   echo 0 | sudo tee /sys/kernel/livepatch/livepatch_kill/enabled
+#   sudo rmmod livepatch_kill
 
 # Now SIGKILL terminates the process
 kill -9 <PID>

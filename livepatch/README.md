@@ -80,11 +80,32 @@ livepatch_kill: SIGKILL intercepted and denied.
 
 ## Unload and Restore
 
+The livepatch can be disabled either via sysfs or by unloading the module directly.
+
+**Option 1 — disable via sysfs, then rmmod:**
+
+```sh
+echo 0 | sudo tee /sys/kernel/livepatch/livepatch_kill/enabled
+```
+
+This triggers the livepatch transition back to the original function. Once the
+transition completes the kernel removes the sysfs entry automatically — the
+directory `/sys/kernel/livepatch/livepatch_kill/` will no longer exist. Then
+unload the module:
+
 ```sh
 sudo rmmod livepatch_kill
 ```
 
-Expected kernel log:
+**Option 2 — rmmod directly:**
+
+```sh
+sudo rmmod livepatch_kill
+```
+
+The livepatch core handles the transition and cleanup automatically.
+
+Expected kernel log after either path:
 
 ```
 livepatch_kill: module exit
