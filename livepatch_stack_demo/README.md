@@ -4,11 +4,12 @@ Demonstrates how the Linux kernel livepatch mechanism uses **per-task stack
 checking** to safely transition tasks to a patched function.  Two kthreads show
 the two outcomes side by side:
 
-- **kthread1** is sleeping inside `slow_func()` when the patch loads — its stack
-  contains the old function, so the kernel cannot switch it yet.
-- **kthread2** also calls `slow_func()` but with a short 3 s sleep between
-  calls — its stack is clear when the patch loads, so it is switched
-  immediately and then calls the new version on every subsequent iteration.
+- **kthread1** calls `slow_func()` in a tight loop with no gap -- its stack
+  almost always contains the old function, so the kernel can never switch it.
+  It is permanently stuck on the old version for as long as it runs.
+- **kthread2** calls `slow_func()` then sleeps 3 s outside it -- its stack is
+  clear most of the time, so the kernel switches it almost immediately after the
+  patch loads and it calls the new version on every subsequent iteration.
 
 The livepatch module dumps both stacks to the kernel log right after enabling
 the patch, so you can see exactly what is blocking the transition.
@@ -18,18 +19,19 @@ the patch, so you can see exactly what is blocking the transition.
 Livepatch works by inserting an ftrace hook at the **entry point** of the old
 function.  Once the hook is in place, any *new* call to that function is
 redirected to the replacement.  But a task that is already *inside* the old
-function — mid-execution, with the old function's stack frame still live — is a
-different story.  If the kernel switched that task's view of the function while
-it was still running the old body, the task would eventually execute a `ret`
-back into code that no longer matches its state, causing undefined behaviour.
-The kernel therefore inspects every task's call stack before switching it: if
-the old function appears anywhere on the stack, that task stays on the old
-version until it returns naturally.  Only then is it safe to redirect it.
+function -- mid-execution, with the old function's stack frame still live -- is
+a different story.  If the kernel switched that task's view of the function
+while it was still running the old body, the task would eventually execute a
+`ret` back into code that no longer matches its state, causing undefined
+behaviour.  The kernel therefore inspects every task's call stack before
+switching it: if the old function appears anywhere on the stack, that task stays
+on the old version until it returns naturally.  Only then is it safe to redirect
+it.
 
 **How it works:**
 1. `target.ko` exports `slow_func()` and spawns two kthreads.  kthread1 calls
-   `slow_func()` (which sleeps for 15 s) in a loop.  kthread2 idles with short
-   sleeps outside `slow_func()`.
+   `slow_func()` (which sleeps for 15 s) in a tight loop with no gap.  kthread2
+   calls `slow_func()` then sleeps 3 s outside it.
 2. `livepatch_demo.ko` calls `klp_enable_patch()` to redirect `slow_func()` to
    `new_slow_func()`.  The kernel enters transition and marks
    `/sys/kernel/livepatch/livepatch_demo/transition` as `1`.
@@ -37,9 +39,9 @@ version until it returns naturally.  Only then is it safe to redirect it.
    `for_each_process`, captures its stack via `stack_trace_save_tsk()`, and
    prints whether `slow_func` is present.  Tasks with `slow_func` on the stack
    are marked `[BLOCKED]`; demo kthreads without it are marked `[SWITCHED]`.
-4. Once kthread1's `msleep` ends and `slow_func()` returns, the kernel's
-   periodic stack check clears it and completes the transition
-   (`transition` → `0`).
+4. kthread2 is switched almost immediately (it is in the 3 s gap outside
+   `slow_func` most of the time) and begins printing `[NEW]`.  kthread1 is
+   permanently blocked -- `transition` stays `1` indefinitely.
 
 > **Note:** Requires `CONFIG_LIVEPATCH=y`, `CONFIG_FUNCTION_TRACER=y`,
 > `CONFIG_HAVE_RELIABLE_STACKTRACE=y`, and `CONFIG_KPROBES=y`.
@@ -68,10 +70,10 @@ Expected kernel log:
 ```
 target: module init
 target: kthread1 started
-target: slow_func enter (task: demo_kthread1)
+target: [OLD] slow_func enter (task: demo_kthread1)
 target: kthread2 started
 target: kthread2 about to call slow_func
-target: slow_func enter (task: demo_kthread2)
+target: [OLD] slow_func enter (task: demo_kthread2)
 ```
 
 ```sh
@@ -86,64 +88,58 @@ Expected kernel log:
 livepatch_demo: module init
 livepatch_demo: patch enabled, transition started
 livepatch_demo: --- per-task stack snapshot ---
-livepatch_demo: [BLOCKED]  demo_kthread1 (pid 123) — slow_func on stack, cannot switch yet
+livepatch_demo: [BLOCKED]  demo_kthread1 (pid 123) -- slow_func on stack, cannot switch yet
 livepatch_demo:   [0] slow_func+0x.../target [target]
 livepatch_demo:   [1] kthread1_fn+0x.../target [target]
 livepatch_demo:   [2] kthread+0x...
 livepatch_demo:   [3] ret_from_fork+0x...
-livepatch_demo: [SWITCHED] demo_kthread2 (pid 124) — slow_func not on stack, switched immediately
+livepatch_demo: [SWITCHED] demo_kthread2 (pid 124) -- slow_func not on stack, switched immediately
 livepatch_demo: --- end of stack snapshot ---
 ```
 
-Check that the transition is still pending:
+Check that the transition is permanently stuck:
 
 ```sh
-cat /sys/kernel/livepatch/livepatch_demo/transition   # 1
+cat /sys/kernel/livepatch/livepatch_demo/transition   # 1 (stays 1 indefinitely)
 ```
 
 ## Demo
 
 Use two terminals so you can watch the kernel log live while running commands.
 
-**Terminal 1** — follow the kernel log continuously:
+**Terminal 1** -- follow the kernel log continuously:
 
 ```sh
 sudo dmesg -w
 ```
 
-**Terminal 2** — load modules and observe the transition:
+**Terminal 2** -- load modules and observe the transition:
 
 ```sh
 # Load the target module
 cd target && sudo insmod ./target.ko
 
-# Wait a moment for kthread1 to enter slow_func(), then load the livepatch
+# Load the livepatch while kthread1 is sleeping inside slow_func
 cd ../livepatch && sudo insmod ./livepatch_demo.ko
 ```
 
-Terminal 1 will immediately show the stack snapshot — kthread1 blocked, kthread2
-switched — and then print `[new] slow_func` each time kthread2 calls it.
+Terminal 1 will immediately show the stack snapshot -- kthread1 blocked,
+kthread2 switched -- and then kthread2 will start printing `[NEW] slow_func`
+while kthread1 continues to print `[OLD] slow_func` forever.
 
 Check transition status in Terminal 2:
 
 ```sh
-cat /sys/kernel/livepatch/livepatch_demo/transition   # 1 while kthread1 is sleeping
-```
-
-After ~15 s kthread1's sleep ends, Terminal 1 shows it calling the new function
-and Terminal 2 shows the transition complete:
-
-```sh
-cat /sys/kernel/livepatch/livepatch_demo/transition   # 0
+cat /sys/kernel/livepatch/livepatch_demo/transition   # 1 -- stuck, kthread1 never clears
 ```
 
 ## Unload and Restore
 
 ```sh
-# Disable the patch via sysfs (sysfs entry disappears once transition completes)
+# Disable the patch via sysfs
 echo 0 | sudo tee /sys/kernel/livepatch/livepatch_demo/enabled
 
-# Then unload both modules (target last, livepatch first)
+# Then unload both modules (livepatch first, target last)
 sudo rmmod livepatch_demo
 sudo rmmod target
 ```

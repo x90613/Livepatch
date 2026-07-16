@@ -19,8 +19,9 @@ MODULE_INFO(livepatch, "Y");
 // Prints which task is now running the new version.
 noinline void new_slow_func(void)
 {
-	pr_info("%s: [new] slow_func called by %s\n", OURMODNAME, current->comm);
+	pr_info("%s: [NEW] slow_func enter (task: %s)\n", OURMODNAME, current->comm);
 	msleep(15000);
+	pr_info("%s: [NEW] slow_func exit  (task: %s)\n", OURMODNAME, current->comm);
 }
 
 static struct klp_func funcs[] = {

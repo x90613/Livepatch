@@ -15,14 +15,15 @@ static struct task_struct *kthread2;
 // noinline ensures slow_func has its own stack frame and is visible to stack_trace_save_tsk.
 noinline void slow_func(void)
 {
-	pr_info("%s: slow_func enter (task: %s)\n", OURMODNAME, current->comm);
+	pr_info("%s: [OLD] slow_func enter (task: %s)\n", OURMODNAME, current->comm);
 	msleep(15000);
-	pr_info("%s: slow_func exit  (task: %s)\n", OURMODNAME, current->comm);
+	pr_info("%s: [OLD] slow_func exit  (task: %s)\n", OURMODNAME, current->comm);
 }
 EXPORT_SYMBOL(slow_func);
 
-// kthread1: calls slow_func() in a loop with no gap — almost always inside it.
-// This ensures slow_func is on its stack when the livepatch loads.
+// kthread1: calls slow_func() in a tight loop with no gap -- always inside it,
+// so the livepatch checker can never switch it. Demonstrates a task permanently
+// stuck on the old version.
 static int kthread1_fn(void *unused)
 {
 	pr_info("%s: kthread1 started\n", OURMODNAME);
@@ -32,9 +33,8 @@ static int kthread1_fn(void *unused)
 	return 0;
 }
 
-// kthread2: also calls slow_func() but with a short 3s sleep — so it spends
-// most of its time outside slow_func() and is switched immediately when the
-// livepatch loads. After switching it calls the new version each iteration.
+// kthread2: calls slow_func() then sleeps 3s outside it -- stack is clear most
+// of the time, so the livepatch checker switches it almost immediately.
 static int kthread2_fn(void *unused)
 {
 	pr_info("%s: kthread2 started\n", OURMODNAME);
