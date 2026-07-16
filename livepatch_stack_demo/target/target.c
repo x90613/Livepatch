@@ -21,14 +21,22 @@ noinline void slow_func(void)
 }
 EXPORT_SYMBOL(slow_func);
 
-// kthread1: calls slow_func() in a tight loop with no gap -- always inside it,
-// so the livepatch checker can never switch it. Demonstrates a task permanently
-// stuck on the old version.
+// kthread1: calls slow_func() in a tight loop for the first 90s -- always inside
+// slow_func, so the livepatch checker can never switch it.  After 90s it sleeps
+// 3s between calls, giving the checker a window to transition it.
 static int kthread1_fn(void *unused)
 {
+	unsigned long start = jiffies;
+
 	pr_info("%s: kthread1 started\n", OURMODNAME);
-	while (!kthread_should_stop())
+	while (!kthread_should_stop()) {
 		slow_func();
+		if (time_after(jiffies, start + 90 * HZ)) {
+			pr_info("%s: kthread1 past 90s, sleeping 3s to allow livepatch transition\n",
+				OURMODNAME);
+			msleep(3000);
+		}
+	}
 	pr_info("%s: kthread1 stopped\n", OURMODNAME);
 	return 0;
 }
