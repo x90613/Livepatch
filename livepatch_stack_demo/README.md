@@ -6,8 +6,9 @@ the two outcomes side by side:
 
 - **kthread1** is sleeping inside `slow_func()` when the patch loads — its stack
   contains the old function, so the kernel cannot switch it yet.
-- **kthread2** is idling outside `slow_func()` — its stack is clear, so it is
-  switched immediately.
+- **kthread2** also calls `slow_func()` but with a short 3 s sleep between
+  calls — its stack is clear when the patch loads, so it is switched
+  immediately and then calls the new version on every subsequent iteration.
 
 The livepatch module dumps both stacks to the kernel log right after enabling
 the patch, so you can see exactly what is blocking the transition.
@@ -69,7 +70,8 @@ target: module init
 target: kthread1 started
 target: slow_func enter (task: demo_kthread1)
 target: kthread2 started
-target: kthread2 idle (outside slow_func)
+target: kthread2 about to call slow_func
+target: slow_func enter (task: demo_kthread2)
 ```
 
 ```sh

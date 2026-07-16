@@ -21,25 +21,28 @@ noinline void slow_func(void)
 }
 EXPORT_SYMBOL(slow_func);
 
-// kthread1: calls slow_func() in a loop — will be stuck inside it when livepatch loads.
+// kthread1: calls slow_func() in a loop with no gap — almost always inside it.
+// This ensures slow_func is on its stack when the livepatch loads.
 static int kthread1_fn(void *unused)
 {
 	pr_info("%s: kthread1 started\n", OURMODNAME);
-	while (!kthread_should_stop()) {
+	while (!kthread_should_stop())
 		slow_func();
-		msleep(500);
-	}
 	pr_info("%s: kthread1 stopped\n", OURMODNAME);
 	return 0;
 }
 
-// kthread2: idles outside slow_func() with short sleeps — will be switched immediately.
+// kthread2: also calls slow_func() but with a short 3s sleep — so it spends
+// most of its time outside slow_func() and is switched immediately when the
+// livepatch loads. After switching it calls the new version each iteration.
 static int kthread2_fn(void *unused)
 {
 	pr_info("%s: kthread2 started\n", OURMODNAME);
 	while (!kthread_should_stop()) {
-		pr_info("%s: kthread2 idle (outside slow_func)\n", OURMODNAME);
-		msleep(2000);
+		pr_info("%s: kthread2 about to call slow_func\n", OURMODNAME);
+		slow_func();
+		pr_info("%s: kthread2 outside slow_func, sleeping 3s\n", OURMODNAME);
+		msleep(3000);
 	}
 	pr_info("%s: kthread2 stopped\n", OURMODNAME);
 	return 0;
