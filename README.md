@@ -21,6 +21,7 @@ Both modules target **arm64, kernel 6.18**.
 kill_demo.c              user-space demo process (shared)
 function_pointer/        syscall table hook via function pointer
 livepatch/               syscall hook via kernel livepatch
+livepatch_stack_demo/    livepatch per-task stack check demo
 ```
 
 ## Build
