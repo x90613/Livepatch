@@ -1,4 +1,4 @@
-# syscall_demo
+# linux-kernel-hooking-demos
 
 Two independent Linux kernel module demos, each exploring a different aspect
 of syscall hooking and livepatching on arm64.
