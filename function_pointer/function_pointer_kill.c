@@ -59,7 +59,7 @@ static unsigned long *get_syscall_table(void)
 	start_rodata = (unsigned long)kallsyms_lookup_name("__start_rodata");
 	init_begin = (unsigned long)kallsyms_lookup_name("__init_begin");
 
-	pr_info("%s: sys_call_table address: %p\n", OURMODNAME, syscall_table);
+	pr_info("%s: sys_call_table address: %px\n", OURMODNAME, syscall_table);
 	return syscall_table;
 }
 
@@ -80,6 +80,7 @@ static void install_hooks(void)
 	unprotect_memory();
 
 	__sys_call_table[__NR_kill] = (unsigned long)&hacked_kill;
+	pr_info("%s: kill syscall hook installed\n", OURMODNAME);
 
 	protect_memory();
 }
@@ -100,20 +101,18 @@ static int __init lkm_init(void)
 	orig_kill = (t_syscall)__sys_call_table[__NR_kill];
 
 	install_hooks();
-	pr_info("%s: kill syscall hook installed\n", OURMODNAME);
 
 	return 0;
 }
 
 static void __exit lkm_exit(void)
 {
-	pr_info("%s: module exit\n", OURMODNAME);
-
 	unprotect_memory();
 	__sys_call_table[__NR_kill] = (unsigned long)orig_kill;
 	protect_memory();
 
 	pr_info("%s: kill syscall hook restored\n", OURMODNAME);
+	pr_info("%s: module exit\n", OURMODNAME);
 }
 
 module_init(lkm_init);
