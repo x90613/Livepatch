@@ -2,8 +2,8 @@
 
 Hooks the `kill(2)` syscall using the kernel livepatch mechanism
 (`CONFIG_LIVEPATCH`).  The hook blocks `SIGKILL` and forwards all other signals
-to the original syscall via `ksys_kill()`.  The patch is removed atomically when
-the module is unloaded — no manual syscall table restoration needed.
+to the original syscall via `kill_pid_info()`.  The patch is removed atomically
+when the module is unloaded — no manual syscall table restoration needed.
 
 **How it works:**
 1. `klp_enable_patch()` resolves the symbol `__arm64_sys_kill` via kallsyms and
@@ -28,7 +28,8 @@ the module is unloaded — no manual syscall table restoration needed.
 ## Build and Load
 
 ```sh
-# Build kill_demo from repo root first (shared by both modules)
+# Build kill_demo from hook_kill_demo/ first (shared by both modules)
+cd hook_kill_demo
 make demo
 
 cd livepatch
@@ -41,7 +42,6 @@ Expected kernel log (`sudo dmesg | tail`):
 
 ```
 livepatch_kill: module init
-livepatch_kill: kill syscall hook installed
 ```
 
 The livepatch entry is also visible in sysfs:
@@ -55,7 +55,7 @@ cat /sys/kernel/livepatch/livepatch_kill/enabled   # 1
 ## Demo
 
 ```sh
-# Terminal 1 — start the demo process (binary is at repo root)
+# Terminal 1 — start the demo process (binary is in hook_kill_demo/)
 ../out/kill_demo
 # prints: kill demo is running. PID: <PID>
 
@@ -128,4 +128,4 @@ make unload        Remove the module
 make logs          Show matching kernel log messages
 ```
 
-Run `make demo` from the repo root to build `out/kill_demo`.
+Run `make demo` from `hook_kill_demo/` to build `out/kill_demo`.

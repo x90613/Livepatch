@@ -24,7 +24,8 @@ restored when the module is removed.
 ## Build and Load
 
 ```sh
-# Build kill_demo from repo root first (shared by both modules)
+# Build kill_demo from hook_kill_demo/ first (shared by both modules)
+cd hook_kill_demo
 make demo
 
 cd function_pointer
@@ -40,14 +41,14 @@ function_pointer_kill: module init
 function_pointer_kill: sys_call_table address: 0xffff...
 function_pointer_kill: __NR_kill = 129
 function_pointer_kill: memory unprotected (RW)
-function_pointer_kill: memory protected (RO)
 function_pointer_kill: kill syscall hook installed
+function_pointer_kill: memory protected (RO)
 ```
 
 ## Demo
 
 ```sh
-# Terminal 1 — start the demo process (binary is at repo root)
+# Terminal 1 — start the demo process (binary is in hook_kill_demo/)
 ../out/kill_demo
 # prints: kill demo is running. PID: <PID>
 
@@ -79,10 +80,10 @@ sudo rmmod function_pointer_kill
 Expected kernel log:
 
 ```
-function_pointer_kill: module exit
 function_pointer_kill: memory unprotected (RW)
 function_pointer_kill: memory protected (RO)
 function_pointer_kill: kill syscall hook restored
+function_pointer_kill: module exit
 ```
 
 After unload, SIGKILL terminates the process normally:
@@ -102,4 +103,4 @@ make unload        Remove the module
 make logs          Show matching kernel log messages
 ```
 
-Run `make demo` from the repo root to build `out/kill_demo`.
+Run `make demo` from `hook_kill_demo/` to build `out/kill_demo`.
